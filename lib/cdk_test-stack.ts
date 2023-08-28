@@ -1,5 +1,5 @@
-import * as cdk from 'aws-cdk-lib';
-import { Construct } from 'constructs';
+import { Construct } from 'constructs'
+import * as cdk from 'aws-cdk-lib'
 import * as ecs from 'aws-cdk-lib/aws-ecs'
 import * as ec2 from 'aws-cdk-lib/aws-ec2'
 import * as ecr from 'aws-cdk-lib/aws-ecr'
@@ -20,26 +20,17 @@ export class CdkTestStack extends cdk.Stack {
       createInternetGateway: true, // default true
       subnetConfiguration: [{ name: 'cdk-public-subnet', subnetType: ec2.SubnetType.PUBLIC }],
     })
-
-    // !: For Fargate
-    // const securityGroup = new ec2.SecurityGroup(this, 'our-cdk-security-group', {
-    //   vpc: vpc,
-    //   description: 'Allow inbound HTTP/HTTPS traffic',
-    //   allowAllOutbound: true,
-    // })
-    // // securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(3000))
-    // securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80))
-    // securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443))
     
     const cluster = new ecs.Cluster(this, 'our-cdk-cluster', {
       vpc: vpc,
       clusterName: 'our-cdk-cluster',
       capacity: {
-        instanceType: ec2.InstanceType.of(ec2.InstanceClass.T2, ec2.InstanceSize.MICRO)
+        instanceType: ec2.InstanceType.of(ec2.InstanceClass.BURSTABLE2, ec2.InstanceSize.MICRO),
       }
     })
     
     const image = ecs.ContainerImage.fromRegistry('qnanna/glovo_api:latest')
+
     const taskDefinition = new ecs.TaskDefinition(this, 'our-cdk-task-definition', {
       networkMode: ecs.NetworkMode.BRIDGE,
       compatibility: ecs.Compatibility.EC2,
@@ -59,27 +50,30 @@ export class CdkTestStack extends cdk.Stack {
       serviceName: 'our-cdk-service',
       cluster: cluster,
       taskDefinition: taskDefinition,
-      // securityGroups: [securityGroup]
+      desiredCount: 1,
     })
 
-    const lb = new elbv2.ApplicationLoadBalancer(this, 'our-cdk-lb', {
+    const targetGroup = new elbv2.ApplicationTargetGroup(this, 'our-cdk-target-group', {
       vpc: vpc,
-      internetFacing: true
-    })
-
-    const listener = lb.addListener('our-cdk-listener', { 
-      port: 80, 
-      open: true,
-    })
-    listener.addTargets('our-cdk-target', {
-      targets: [service],
-      port: 3000,
+      port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
       healthCheck: {
-        interval: cdk.Duration.seconds(60),
-        path: "/api/service/healthcheck",
+        path: "/api/service/healthcheck", 
         timeout: cdk.Duration.seconds(5),
-      }
+        interval: cdk.Duration.seconds(60),
+      },
+      targets: [service],
+    })
+
+    const lb = new elbv2.ApplicationLoadBalancer(this, 'our-cdk-load-balancer', {
+      vpc: vpc,
+      internetFacing: true,
+    })
+
+    const listener = lb.addListener('our-cdk-listener', {
+      port: 80, 
+      open: true,
+      defaultTargetGroups: [targetGroup]
     })
     listener.addAction('/static', {
       priority: 1,
@@ -90,6 +84,10 @@ export class CdkTestStack extends cdk.Stack {
       })
     })
 
-    new cdk.CfnOutput(this, 'LoadBalancerDNS', { value: lb.loadBalancerDnsName });
+    const serviceScaling = service.autoScaleTaskCount({ minCapacity: 1, maxCapacity: 2 })
+    serviceScaling.scaleOnCpuUtilization('our-cdk-cpu-scaling', { targetUtilizationPercent: 90 })
+    // serviceScaling.scaleOnRequestCount('our-cdk-requests-scaling', { requestsPerTarget: 900, targetGroup: targetGroup })
+
+    new cdk.CfnOutput(this, 'LoadBalancerDNS', { value: lb.loadBalancerDnsName })
   }
 }
